@@ -2,7 +2,7 @@
 #+OPTIONS: toc:2 num:nil
 
 Use *Druide Antidote 9* — the French/English grammar & spell checker — as a
-corrector inside *Emacs*, on Linux.  Antidote is a commercial proprietary spellchecker: https://www.antidote.info/en/antidote-9. 
+corrector inside *Emacs*.  Antidote is a commercial proprietary spellchecker: https://www.antidote.info/en/antidote-9. 
 
 Antidote 9 has very appealing characteristics, such its ability to spellcheck and correct .tex documents ignoring the \LaTex =\usepackage=, =\documentclass=, etc settings.  Unfortunately, Antidote is discontinued for Linux. If you want to continue using it on recent distributions, a patch is given in [[*Reviving Antidote 9 on a modern Linux (for owners)][Reviving Antidote 9 on a modern Linux (for owners)]] for Ubuntu 25 +.
 
