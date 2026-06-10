@@ -1,0 +1,248 @@
+#+TITLE: antidote9-emacs
+#+OPTIONS: toc:2 num:nil
+
+Use *Druide Antidote 9* — the French/English grammar & spell checker — as a
+corrector inside *Emacs*, on Linux.  Antidote is a commercial proprietary spellchecker: https://www.antidote.info/en/antidote-9. 
+
+Antidote 9 has very appealing characteristics, such its ability to spellcheck and correct .tex documents ignoring the \LaTex =\usepackage=, =\documentclass=, etc settings.  Unfortunately, Antidote is discontinued for Linux. If you want to continue using it on recent distributions, a patch is given in [[*Reviving Antidote 9 on a modern Linux (for owners)][Reviving Antidote 9 on a modern Linux (for owners)]] for Ubuntu 25 +.
+
+The Emacs connector works like this. Either select a region or a whole buffer, run a command, review and apply Antidote's corrections in its own window, close and save the Antidote window, and the corrected text flows straight back into your buffer.
+
+You can also open Antidote's *dictionaries* and *guides* on the word at point.
+
+* Requirements
+- Emacs 26.1+
+- A working, *activated* Antidote 9 for Linux (X11 session)
+- Linux
+
+* Installation (Emacs side)
+Clone this repo, then in your init:
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/antidote9-emacs")
+(require 'antidote)
+
+;; If `Antidote9' is not on your PATH, point this at the launcher:
+;; (setq antidote-program "/opt/Druide/Antidote9/Application/Bin64/Antidote9")
+
+;; Handy prefix: C-c a c (correct), C-c a d (dict), C-c a g (guides), ...
+(keymap-global-set "C-c a" antidote-command-map)
+#+end_src
+
+The default for =antidote-program= auto-detects =Antidote9= on =exec-path= and in
+the locations the official installer uses (=/usr/local/bin/Antidote9=,
+=/opt/Druide/Antidote9/...=).
+
+* Usage
+| Command                 | What it does                                   |
+|-------------------------+------------------------------------------------|
+| =antidote-correct=        | Correct the active region, or the whole buffer |
+| =antidote-correct-buffer= | Correct the whole buffer                       |
+| =antidote-dictionnaries=  | Open the dictionaries on the word at point     |
+| =antidote-guides=         | Open the guides on the word at point           |
+
+** Keybindings
+=antidote-command-map= is a prefix keymap; bind it once (example above) and:
+
+| key     | command                  |
+|---------+--------------------------|
+| =C-c a c= | =antidote-correct=         |
+| =C-c a b= | =antidote-correct-buffer=  |
+| =C-c a d= | =antidote-dictionnaries=   |
+| =C-c a g= | =antidote-guides=          |
+
+
+** The correction flow
+1. =C-c a c= on a region. Antidote opens on the text (its real corrector UI).
+2. Review and apply corrections (double-click an error, or use the green ✓ to
+   apply all). Both French and English work — Antidote auto-detects the language.
+3. *Save* (=Ctrl+S=). Your Emacs region updates within a moment. You do not have
+   to close Antidote; keep correcting and saving and the buffer keeps in sync.
+
+* How it works
+Antidote 9's connectors normally talk to a background agent over D-Bus + a
+WebSocket. That path turned out to be unusable for an external tool: Antidote
+only applies corrections into a *live, editable document window* it controls
+(it refuses otherwise with "applying the correction would cause a character
+shift"). So instead this connector uses a *file round-trip*:
+
+#+begin_example
+region  ──▶  temp .txt  ──▶  Antidote9 -- Corrector tool -- File <tmp>
+                                             │  (you review & apply, then save)
+buffer  ◀──  read back   ◀────────────────┘
+#+end_example
+
+Emacs launches Antidote asynchronously and polls the temp file's mtime; when Antidote saves, the corrected text replaces the region (via markers, so it tracks edits). Simple and robust — Antidote owns the document, so applying corrections "just works".
+
+* Reviving Antidote 9 on a modern Linux (for owners)
+The 2018 installer mostly worked on Ubtuntu 24 but it stopped working after upgrading to Ubuntu 25.
+
+The application is installed under =/opt/Druide/Antidote9/=. The main launcher is =/usr/local/bin/Antidote=, which calls the real binary =/opt/Druide/Antidote9/Application/Bin64/Antidote9.bin=.
+
+** Problem 1: X11 Authorization Failure
+*** Symptom
+
+#+begin_example
+Authorization required, but no authorization protocol specified
+QXcbConnection: Could not connect to display :0
+#+end_example
+
+*** Root Cause
+
+The launcher script =/usr/local/bin/Antidote= overrides =XAUTHORITY= with a freshly created empty file =~/.Druide/XAuthorityDruide=, discarding the real session cookies. 
+Additionally a typo in the original script (=.XAuthorityDruide= vs =XAuthorityDruide=)
+caused the file to be recreated empty on every launch.
+
+*** Fix
+
+Patch the launcher to copy the real display's auth cookie into the Druide file before launching. Add this block after the file creation logic:
+
+#+begin_src bash
+if [ -n "$DISPLAY" ]; then
+    xauth extract - "$DISPLAY" | XAUTHORITY="$DRUIDE_XAUTH" xauth merge -
+fi
+#+end_src
+
+** Problem 2: Segmentation Fault (libxml2 ABI break)
+*** Symptom
+
+#+begin_example
+Erreur de segmentation (core dumped)
+#+end_example
+
+*** Diagnosis
+
+GDB backtrace pointed to:
+
+#+begin_example
+#1  ??? () at /lib/x86_64-linux-gnu/libxml2.so.16
+#3  xmlParseDocument () at libxml2.so.16
+#5-#9  xslt parsing chain (libxslt.so.1)
+#+end_example
+
+Ubuntu 25 ships =libxml2= 3.x which changed its soname from =libxml2.so.2= to =libxml2.so.16=. Antidote (built in 2018 against Qt 5.5.1) expects =libxml2.so.2= and the two are binary-incompatible.
+
+*** Fix
+
+Ubuntu 25 still has the old =libxml2= 2.9.14 installed (as =libxml2= package alongside the new =libxml2-16= package). Copy it into Antidote's private lib directory so it takes priority:
+
+#+begin_src bash
+sudo cp /usr/lib/x86_64-linux-gnu/libxml2.so.2* \
+  /opt/Druide/Antidote9/Application/Bin64/
+#+end_src
+
+** Problem 3: Segmentation Fault (libxslt linked against wrong libxml2)
+*** Symptom
+
+Same segfault as above, persisting after the libxml2 fix.
+
+*** Root Cause
+
+The system =libxslt.so.1= (version 1.1.43) was compiled against =libxml2.so.16=.
+Since Antidote calls =libxslt= which in turn loads =libxml2.so.16=, the private copy of =libxml2.so.2= was bypassed.
+
+The full dependency chain was:
+#+begin_example
+Antidote9.bin → libOutilsNoyau.so.9 → libxslt.so.1 → libxml2.so.16  (crash)
+#+end_example
+
+*** Fix
+
+Download the Ubuntu 24.04 version of =libxslt= (1.1.39), which was compiled against =libxml2.so.2=, and install it into Antidote's private lib directory.
+
+Verify it links against the right libxml2 before copying:
+
+#+begin_src bash
+ldd /tmp/libxslt-old/usr/lib/x86_64-linux-gnu/libxslt.so.1.1.39 | grep xml
+# Should show: libxml2.so.2 => /opt/Druide/Antidote9/Application/Bin64/libxml2.so.2
+#+end_src
+
+Then install:
+
+#+begin_src bash
+sudo cp /tmp/libxslt-old/usr/lib/x86_64-linux-gnu/libxslt.so.1.1.39 \
+  /opt/Druide/Antidote9/Application/Bin64/
+sudo ln -sf libxslt.so.1.1.39 \
+  /opt/Druide/Antidote9/Application/Bin64/libxslt.so.1
+#+end_src
+
+The =libxslt1.1_1.1.39-0exp1build1_amd64.deb= package can be found on [[http://archive.ubuntu.com/ubuntu/pool/main/libx/libxslt/][Ubuntu 24.04 archive]].
+
+** Problem 4: IBus permission error
+*** Symptom
+
+#+begin_example
+IBUS-WARNING **: Failed to mkdir ~/.config/ibus/bus: Permission non accordée
+#+end_example
+
+*** Root Cause
+
+=~/.config/ibus/= was owned by root, probably created accidentally with =sudo= at some point.
+
+*** Fix
+
+#+begin_src bash
+sudo chown -R $USER: ~/.config/ibus/
+#+end_src
+
+Note: use =$USER:= (with trailing colon, no group name) rather than =$USER:$USER= if
+your primary group name differs from your username.
+
+** Final Launcher Script
+
+The fully patched =/usr/local/bin/Antidote9= file after all fixes:
+
+#+begin_src bash
+#!/bin/bash
+SELF=$0
+if [ -h "$SELF" ] ; then
+    SELF=`readlink -f "$SELF"`
+fi
+if [ ${USER} == "root" ] ; then HOME=/root ; fi
+SELF=$(cd $(dirname "$SELF"); pwd -P)/$(basename "$SELF")
+SELF_DIR=`dirname "$SELF"`
+SELF_NAME=`basename "$SELF"`
+SELF_BIN=${SELF_NAME}.bin
+
+DRUIDE_XAUTH=~/.Druide/XAuthorityDruide
+if [ ! -f "$DRUIDE_XAUTH" ]; then
+    mkdir -p ~/.Druide
+    touch "$DRUIDE_XAUTH"
+fi
+
+# Populate Druide's auth file with the real session cookies
+if [ -n "$DISPLAY" ]; then
+    xauth extract - "$DISPLAY" | XAUTHORITY="$DRUIDE_XAUTH" xauth merge -
+fi
+
+export XAUTHORITY="$DRUIDE_XAUTH"
+
+# Prepend Antidote's private libs so they take priority over system libs
+export LD_LIBRARY_PATH="/opt/Druide/Antidote9/Application/Bin64:$LD_LIBRARY_PATH"
+
+# Launch, suppressing harmless warnings
+HOME=${HOME} "${SELF_DIR}/${SELF_BIN}" "$@" 2> >(grep -vE "IBUS-WARNING|canberra-gtk-module" >&2)
+#+end_src
+
+** Remaining Harmless Warnings
+
+These warnings appear at launch but do not affect functionality:
+
+| Warning                                               | Cause                                         | Impact                                                  |
+|-------------------------------------------------------+-----------------------------------------------+---------------------------------------------------------|
+| =Failed to load module "canberra-gtk-module"=           | GTK2 sound-events module dropped in Ubuntu 25 | None, Antidote doesn't use it                           |
+| =AssistantTelechargement.bin: GLIBCXX_3.4.30 not found= | Update downloader has a bundled old =libstdc++= | Auto-update assistant may not work; core app unaffected |
+
+** Files Modified / Added
+
+| Path                                                      | Action                                              |
+|-----------------------------------------------------------+-----------------------------------------------------|
+| =/usr/local/bin/Antidote=                                   | Patched (xauth fix, LD_LIBRARY_PATH, noise filtering) |
+| =/opt/Druide/Antidote9/Application/Bin64/libxml2.so.2=      | Added symlink (copied from system)                  |
+| =/opt/Druide/Antidote9/Application/Bin64/libxml2.so.2.9.14= | Added (copied from system)                          |
+| =/opt/Druide/Antidote9/Application/Bin64/libxslt.so.1=      | Added symlink → =libxslt.so.1.1.39=                  |
+| =/opt/Druide/Antidote9/Application/Bin64/libxslt.so.1.1.39= | Added (from Ubuntu 24.04 package)                   |
+| =~/.config/ibus/=                                           | Ownership fixed to =$USER=                            |
+
+* Licence
+This connector, its documentation and the =Antidote9= patched file are released under the *GNU GPL v3 or later* (see [[file:LICENSE][LICENSE]]). Antidote itself is proprietary software © Druide informatique inc. and is not included here.
