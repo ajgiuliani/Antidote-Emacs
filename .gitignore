@@ -1,0 +1,7 @@
+*.elc
+*~
+\#*\#
+.\#*
+/antidote-*.txt
+docs/*
+tools/*
